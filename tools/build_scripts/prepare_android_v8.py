@@ -216,7 +216,11 @@ def ndk_prebuilt(ndk):
 
 
 def ndk_toolchain_clang(ndk, api_level_value=NDK_GUARD_API_LEVEL):
-    return ndk_prebuilt(ndk) / "bin" / f"aarch64-linux-android{api_level_value}-clang++"
+    base = ndk_prebuilt(ndk) / "bin" / f"aarch64-linux-android{api_level_value}-clang++"
+    for cand in (base, base.with_suffix(".cmd"), base.with_suffix(".exe")):
+        if cand.is_file():
+            return cand
+    return base
 
 
 def is_usable_ndk(ndk):
@@ -637,69 +641,86 @@ def ensure_gn_ninja(cache, source):
     return paths
 
 
-def patch_clang_update_script(source, ndk):
-    update_script = source / "tools/clang/scripts/update.py"
-    if not update_script.is_file():
-        return
-    content = update_script.read_text()
-    if "libclang_rt.builtins" in content:
-        return
-    ndk_clean = str(ndk).replace('\\', '/')
-    hook = f'''
-  # Added by Operit2 for Android compiler-rt builtins
-  try:
-    import shutil
-    from pathlib import Path
-    for b in Path(r"{ndk_clean}").rglob("libclang_rt.builtins*.a"):
-      if b.is_file():
-        for cr in Path(output_dir).glob("lib/clang/*/lib"):
-          dest_dir = cr / "linux"
-          dest_dir.mkdir(parents=True, exist_ok=True)
-          shutil.copyfile(b, dest_dir / b.name)
-  except Exception as e:
-    print(f"Warning: could not copy builtins in update.py: {{e}}")
-'''
-    target = "return UpdatePackage("
-    if target in content:
-        content = content.replace(
-            "return UpdatePackage(\n    args.package, args.host_os, args.preserve_gcs_signature, output_dir\n  )",
-            "ret = UpdatePackage(\n    args.package, args.host_os, args.preserve_gcs_signature, output_dir\n  )\n" + hook + "\n  return ret"
-        )
-        update_script.write_text(content)
-        print("Patched tools/clang/scripts/update.py to auto-populate NDK builtins", file=sys.stderr, flush=True)
+def populate_clang_dir(clang_dir, ndk, source):
+    """Ensure a clang directory has full compiler aliases, NDK llvm utilities, and builtins."""
+    clang_dir = Path(clang_dir)
+    bin_p = clang_dir / "bin"
+    bin_p.mkdir(parents=True, exist_ok=True)
 
+    # 1. Alias clang-cl.exe to clang.exe, clang++.exe, and non-exe aliases
+    clang_cl = bin_p / "clang-cl.exe"
+    if clang_cl.is_file():
+        for target_name in ("clang.exe", "clang++.exe", "clang", "clang++"):
+            dst = bin_p / target_name
+            if not dst.exists():
+                try:
+                    shutil.copyfile(clang_cl, dst)
+                    print(f"Created compiler alias: {dst.name} from clang-cl.exe", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"Warning: could not copy {clang_cl} to {dst}: {e}", file=sys.stderr, flush=True)
 
-def ensure_clang_builtins(source, cache, config, ndk):
-    """Ensure Chromium clang has the required Android compiler-rt builtins from NDK."""
-    target_build_dir = (cache / "build").resolve() / config["target"] / "release"
-    clang_dir = target_build_dir / "clang"
-    clang_dir.mkdir(parents=True, exist_ok=True)
+    # 2. Search NDK for llvm utilities (llvm-ar, llvm-nm, llvm-readelf, llvm-strip, lld, ld.lld)
+    ndk_search_paths = [Path(ndk), Path(source) / "third_party/android_ndk", Path(source) / "third_party/android_toolchain/ndk"]
+    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    if sdk:
+        ndk_search_paths.append(Path(sdk) / "ndk")
 
-    update_script = source / "tools/clang/scripts/update.py"
-    if update_script.is_file():
-        print(f"Ensuring Chromium clang is downloaded to {clang_dir}", file=sys.stderr, flush=True)
-        run([sys.executable, str(update_script), "--output-dir", str(clang_dir)])
+    ndk_bin = None
+    for sp in ndk_search_paths:
+        if not sp.is_dir():
+            continue
+        candidates = list(sp.glob("toolchains/llvm/prebuilt/*/bin"))
+        if candidates and candidates[0].is_dir():
+            ndk_bin = candidates[0]
+            break
+        if (sp / "bin").is_dir():
+            ndk_bin = sp / "bin"
+            break
 
-    if IS_WINDOWS and (clang_dir / "bin").is_dir():
-        for exe in (clang_dir / "bin").glob("*.exe"):
+    if ndk_bin:
+        for util in ("llvm-ar", "llvm-nm", "llvm-readelf", "llvm-strip", "lld", "ld.lld"):
+            src_exe = ndk_bin / f"{util}.exe"
+            if not src_exe.is_file():
+                src_exe = ndk_bin / util
+            if src_exe.is_file():
+                for dst_name in (f"{util}.exe", util):
+                    dst = bin_p / dst_name
+                    if not dst.exists():
+                        try:
+                            shutil.copyfile(src_exe, dst)
+                            print(f"Copied {dst_name} from NDK to clang bin", file=sys.stderr, flush=True)
+                        except Exception as e:
+                            print(f"Warning: could not copy {src_exe} to {dst}: {e}", file=sys.stderr, flush=True)
+
+        for c_name in ("clang", "clang++"):
+            for ext in (".exe", ""):
+                dst = bin_p / f"{c_name}{ext}"
+                if not dst.exists():
+                    src_c = ndk_bin / f"{c_name}.exe"
+                    if not src_c.is_file():
+                        src_c = ndk_bin / c_name
+                    if src_c.is_file():
+                        try:
+                            shutil.copyfile(src_c, dst)
+                            print(f"Copied {dst.name} from NDK to clang bin", file=sys.stderr, flush=True)
+                        except Exception as e:
+                            print(f"Warning: could not copy {src_c} to {dst}: {e}", file=sys.stderr, flush=True)
+
+    # 3. Create aliases without .exe for any other binaries
+    if IS_WINDOWS:
+        for exe in bin_p.glob("*.exe"):
             alias = exe.with_suffix("")
             if not alias.exists():
                 try:
                     shutil.copyfile(exe, alias)
                 except Exception as e:
-                    print(f"Warning: could not copy {exe} to {alias}: {e}", file=sys.stderr, flush=True)
+                    pass
 
-    ndk_search_paths = [ndk, source / "third_party/android_ndk", source / "third_party/android_toolchain/ndk"]
-    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
-    if sdk:
-        ndk_search_paths.append(Path(sdk) / "ndk")
-
+    # 4. Populate compiler-rt builtins for Android
     ndk_builtins = []
-    for search_path in ndk_search_paths:
-        if search_path.is_dir():
-            ndk_builtins += [p for p in search_path.rglob("libclang_rt.builtins*.a") if p.is_file()]
-
-    print(f"Found {len(ndk_builtins)} NDK builtins in search paths", file=sys.stderr, flush=True)
+    for sp in ndk_search_paths:
+        if sp.is_dir():
+            ndk_builtins += [p for p in sp.rglob("libclang_rt.builtins*.a") if p.is_file()]
 
     clang_lib_dirs = list(clang_dir.glob("lib/clang/*/lib"))
     if not clang_lib_dirs:
@@ -710,8 +731,125 @@ def ensure_clang_builtins(source, cache, config, ndk):
         dest_linux.mkdir(parents=True, exist_ok=True)
         for b in ndk_builtins:
             dest_file = dest_linux / b.name
-            shutil.copyfile(b, dest_file)
-            print(f"Copied {b.name} -> {dest_file}", file=sys.stderr, flush=True)
+            if not dest_file.exists():
+                try:
+                    shutil.copyfile(b, dest_file)
+                    print(f"Copied builtin {b.name} -> {dest_file}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    pass
+
+
+def patch_clang_update_script(source, ndk):
+    update_script = source / "tools/clang/scripts/update.py"
+    if not update_script.is_file():
+        return
+    content = update_script.read_text()
+    if "# Added by Operit2 for Android Clang & LLVM tools setup" in content:
+        return
+    ndk_clean = str(ndk).replace('\\', '/')
+    hook = f'''  ret = UpdatePackage(args.package, args.host_os, args.preserve_gcs_signature,
+                       output_dir)
+  # Added by Operit2 for Android Clang & LLVM tools setup
+  try:
+    import shutil
+    from pathlib import Path
+    out_p = Path(output_dir)
+    bin_p = out_p / "bin"
+    bin_p.mkdir(parents=True, exist_ok=True)
+
+    clang_cl = bin_p / "clang-cl.exe"
+    if clang_cl.is_file():
+      for target_name in ("clang.exe", "clang++.exe", "clang", "clang++"):
+        dst = bin_p / target_name
+        if not dst.exists():
+          shutil.copyfile(clang_cl, dst)
+          print(f"Created compiler alias: {{dst.name}} from clang-cl.exe")
+
+    ndk_p = Path(r"{ndk_clean}")
+    ndk_bin_candidates = list(ndk_p.glob("toolchains/llvm/prebuilt/*/bin"))
+    if not ndk_bin_candidates and (ndk_p / "bin").is_dir():
+      ndk_bin_candidates = [ndk_p / "bin"]
+    if ndk_bin_candidates:
+      ndk_bin = ndk_bin_candidates[0]
+      for util in ("llvm-ar", "llvm-nm", "llvm-readelf", "llvm-strip", "lld", "ld.lld"):
+        src_exe = ndk_bin / f"{{util}}.exe"
+        if not src_exe.is_file():
+          src_exe = ndk_bin / util
+        if src_exe.is_file():
+          for dst_name in (f"{{util}}.exe", util):
+            dst = bin_p / dst_name
+            if not dst.exists():
+              shutil.copyfile(src_exe, dst)
+              print(f"Copied {{dst_name}} from NDK to clang bin")
+
+      for c_name in ("clang", "clang++"):
+        for ext in (".exe", ""):
+          dst = bin_p / f"{{c_name}}{{ext}}"
+          if not dst.exists():
+            src_c = ndk_bin / f"{{c_name}}.exe"
+            if not src_c.is_file():
+              src_c = ndk_bin / c_name
+            if src_c.is_file():
+              shutil.copyfile(src_c, dst)
+              print(f"Copied {{dst.name}} from NDK to clang bin")
+
+    for b in ndk_p.rglob("libclang_rt.builtins*.a"):
+      if b.is_file():
+        for cr in out_p.glob("lib/clang/*/lib"):
+          dest_dir = cr / "linux"
+          dest_dir.mkdir(parents=True, exist_ok=True)
+          dst_b = dest_dir / b.name
+          if not dst_b.exists():
+            shutil.copyfile(b, dst_b)
+            print(f"Copied builtin {{b.name}} -> {{dst_b}}")
+  except Exception as e:
+    print(f"Warning: could not complete clang/ndk setup in update.py: {{e}}")
+  return ret'''
+
+    # If old hook exists, remove it first
+    if "# Added by Operit2 for Android compiler-rt builtins" in content:
+        import re
+        content = re.sub(
+            r'  ret = UpdatePackage\(.*?\n  return ret',
+            '  return UpdatePackage(args.package, args.host_os, args.preserve_gcs_signature,\n                       output_dir)',
+            content,
+            flags=re.DOTALL
+        )
+
+    targets = [
+        "  return UpdatePackage(args.package, args.host_os, args.preserve_gcs_signature,\n                       output_dir)",
+        "  return UpdatePackage(\n    args.package, args.host_os, args.preserve_gcs_signature, output_dir\n  )",
+    ]
+    for target in targets:
+        if target in content:
+            content = content.replace(target, hook)
+            update_script.write_text(content)
+            print("Patched tools/clang/scripts/update.py with full Clang & LLVM tools setup", file=sys.stderr, flush=True)
+            return
+
+    import re
+    match = re.search(r'  return UpdatePackage\([^)]+\)', content)
+    if match:
+        content = content[:match.start()] + hook + content[match.end():]
+        update_script.write_text(content)
+        print("Patched tools/clang/scripts/update.py (via regex)", file=sys.stderr, flush=True)
+
+
+def ensure_clang_builtins(source, cache, config, ndk):
+    """Ensure Chromium clang has the required Android compiler-rt builtins and tools from NDK."""
+    target_build_dir = (cache / "build").resolve() / config["target"] / "release"
+    probe_target_dir = (cache / "probe/target").resolve() / config["target"] / "release"
+    update_script = source / "tools/clang/scripts/update.py"
+
+    for clang_dir in [probe_target_dir / "clang", target_build_dir / "clang"]:
+        clang_dir.mkdir(parents=True, exist_ok=True)
+        if update_script.is_file():
+            print(f"Ensuring Chromium clang is downloaded to {clang_dir}", file=sys.stderr, flush=True)
+            try:
+                run([sys.executable, str(update_script), "--output-dir", str(clang_dir)])
+            except Exception as e:
+                print(f"Warning: update.py failed for {clang_dir}: {e}", file=sys.stderr, flush=True)
+        populate_clang_dir(clang_dir, ndk, source)
 
 
 def build(cache, config, ndk):
