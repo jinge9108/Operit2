@@ -105,6 +105,11 @@ jobs:
           "$((Get-Item .ci-tools/typescript/node_modules/.bin).FullName)" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           npm install -g typescript@5.9.3
 
+      - name: Set up Python virtual environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+
       - name: Install Java
         uses: actions/setup-java@v4
         with:
