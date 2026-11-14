@@ -256,10 +256,22 @@ val operitRepoRoot = project.layout.projectDirectory
     .asFile
 val operitPluginSyncScript = operitRepoRoot
     .resolve("plugins/tools/sync_plugin_packages.py")
-val operitPluginSyncPython = if (System.getProperty("os.name").lowercase().contains("windows")) {
-    operitRepoRoot.resolve(".venv/Scripts/python.exe")
-} else {
-    operitRepoRoot.resolve(".venv/bin/python")
+val operitPluginSyncPython = run {
+    val venvPython = if (System.getProperty("os.name").lowercase().contains("windows")) {
+        operitRepoRoot.resolve(".venv/Scripts/python.exe")
+    } else {
+        operitRepoRoot.resolve(".venv/bin/python")
+    }
+    if (venvPython.isFile) {
+        venvPython
+    } else {
+        val pathPython = if (System.getProperty("os.name").lowercase().contains("windows")) "python.exe" else "python3"
+        val resolved = (System.getenv("PATH") ?: "")
+            .split(File.pathSeparator)
+            .map { File(it, pathPython) }
+            .firstOrNull { it.isFile }
+        resolved ?: File(pathPython)
+    }
 }
 val operitBridgeJniLibs = project.layout.projectDirectory.dir("src/main/jniLibs").asFile
 val operitIsWindows = System.getProperty("os.name").lowercase().contains("windows")
