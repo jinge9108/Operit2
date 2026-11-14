@@ -361,6 +361,47 @@ def patch_android_config(source):
             win_build_gn.write_text(wbg_content)
 
 
+def patch_v8_build_rs(source):
+    """Disable ccache/sccache in rusty_v8's build.rs.
+
+    On Windows CI runners, Strawberry Perl's 32-bit ccache.exe gets detected
+    by which("ccache"). It uses GetFullPathNameA with a 260-character MAX_PATH limit,
+    which fails when resolving deep relative paths to V8 headers. Disabling
+    ccache forces direct clang-cl execution, which natively supports long paths.
+    """
+    build_rs = source / "build.rs"
+    if not build_rs.is_file():
+        return
+    content = build_rs.read_text()
+    modified = False
+
+    # 1. Neutralize cc_wrapper function
+    new_content = re.sub(
+        r"fn cc_wrapper\s*\([^)]*\)\s*\{[\s\S]*?\n\}",
+        "fn cc_wrapper(_gn_args: &mut Vec<String>, _sccache_path: &Path) {\n  // Disabled by Operit2\n}",
+        content,
+    )
+    if new_content != content:
+        content = new_content
+        modified = True
+
+    # 2. Prevent checking ccache / sccache env and binary
+    for old, new in (
+        ('env::var_os("SCCACHE")', 'env::var_os("__OPERIT_DISABLED_SCCACHE__")'),
+        ('env::var_os("CCACHE")', 'env::var_os("__OPERIT_DISABLED_CCACHE__")'),
+        ('which("sccache")', 'which("__operit_disabled_sccache__")'),
+        ('which("ccache")', 'which("__operit_disabled_ccache__")'),
+    ):
+        if old in content:
+            content = content.replace(old, new)
+            modified = True
+
+    if modified:
+        build_rs.write_text(content)
+        print("Patched rusty_v8 build.rs to disable ccache/sccache compiler wrappers",
+              file=sys.stderr, flush=True)
+
+
 def stub_missing_pydeps(source):
     """Create empty placeholders for python dependency manifests the crate omits.
 
@@ -637,6 +678,7 @@ def build(cache, config, ndk):
                                   "--format-version", "1"]))
     source = Path(next(p["manifest_path"] for p in metadata["packages"] if p["name"] == "v8")).parent
     patch_android_config(source)
+    patch_v8_build_rs(source)
     patch_clang_update_script(source, ndk)
     stub_missing_pydeps(source)
     install_linux_sysroot(source)
@@ -654,8 +696,18 @@ def build(cache, config, ndk):
               file=sys.stderr, flush=True)
     env = os.environ.copy()
     for name in ("DOCS_RS", "RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH", "GN_ARGS",
-                 "EXTRA_GN_ARGS", "CARGO_ENCODED_RUSTFLAGS", "V8_FORCE_DEBUG"):
+                 "EXTRA_GN_ARGS", "CARGO_ENCODED_RUSTFLAGS", "V8_FORCE_DEBUG", "CCACHE", "SCCACHE"):
         env.pop(name, None)
+    env["CCACHE_DISABLE"] = "1"
+    # Filter out Strawberry Perl and any directory containing ccache from PATH
+    clean_path = []
+    for p in env.get("PATH", "").split(os.pathsep):
+        if not p or "strawberry" in p.lower():
+            continue
+        if (Path(p) / "ccache.exe").is_file() or (Path(p) / "ccache").is_file():
+            continue
+        clean_path.append(p)
+    env["PATH"] = os.pathsep.join(clean_path)
     # GN_ARGS carries only what rusty_v8's build script does not set itself.
     args = {**GN_OPTIONS, "android_ndk_api_level": api_level(),
             "android_ndk_version": ndk_version(ndk), "android_ndk_root": str(ndk).replace("\\", "/")}

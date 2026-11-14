@@ -95,6 +95,7 @@ apps/flutter/app/ios/Runner/python/
 
 # Rust
 target/
+.cargo_home/
 
 # ESP32 / ESP-IDF build outputs
 edge/boards/esp32/.embuild/
