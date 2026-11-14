@@ -63,7 +63,7 @@ foreach ($item in $items) {
                     $success = $true
                     break
                 } else {
-                    Write-Host "SHA256 mismatch for $url: expected $($item.Sha256), got $actualSha256"
+                    Write-Host "SHA256 mismatch for $($url): expected $($item.Sha256), got $actualSha256"
                 }
             }
         } catch {
