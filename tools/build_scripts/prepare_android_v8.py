@@ -557,6 +557,74 @@ def ensure_gn_ninja(cache, source):
     return paths
 
 
+def patch_clang_update_script(source, ndk):
+    update_script = source / "tools/clang/scripts/update.py"
+    if not update_script.is_file():
+        return
+    content = update_script.read_text()
+    if "libclang_rt.builtins" in content:
+        return
+    ndk_clean = str(ndk).replace('\\', '/')
+    hook = f'''
+  # Added by Operit2 for Android compiler-rt builtins
+  try:
+    import shutil
+    from pathlib import Path
+    for b in Path(r"{ndk_clean}").rglob("libclang_rt.builtins*.a"):
+      if b.is_file():
+        for cr in Path(output_dir).glob("lib/clang/*/lib"):
+          dest_dir = cr / "linux"
+          dest_dir.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(b, dest_dir / b.name)
+  except Exception as e:
+    print(f"Warning: could not copy builtins in update.py: {{e}}")
+'''
+    target = "return UpdatePackage("
+    if target in content:
+        content = content.replace(
+            "return UpdatePackage(\n    args.package, args.host_os, args.preserve_gcs_signature, output_dir\n  )",
+            "ret = UpdatePackage(\n    args.package, args.host_os, args.preserve_gcs_signature, output_dir\n  )\n" + hook + "\n  return ret"
+        )
+        update_script.write_text(content)
+        print("Patched tools/clang/scripts/update.py to auto-populate NDK builtins", file=sys.stderr, flush=True)
+
+
+def ensure_clang_builtins(source, cache, config, ndk):
+    """Ensure Chromium clang has the required Android compiler-rt builtins from NDK."""
+    target_build_dir = (cache / "build").resolve() / config["target"] / "release"
+    clang_dir = target_build_dir / "clang"
+    clang_dir.mkdir(parents=True, exist_ok=True)
+
+    update_script = source / "tools/clang/scripts/update.py"
+    if update_script.is_file():
+        print(f"Ensuring Chromium clang is downloaded to {clang_dir}", file=sys.stderr, flush=True)
+        run([sys.executable, str(update_script), "--output-dir", str(clang_dir)])
+
+    ndk_search_paths = [ndk, source / "third_party/android_ndk", source / "third_party/android_toolchain/ndk"]
+    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    if sdk:
+        ndk_search_paths.append(Path(sdk) / "ndk")
+
+    ndk_builtins = []
+    for search_path in ndk_search_paths:
+        if search_path.is_dir():
+            ndk_builtins += [p for p in search_path.rglob("libclang_rt.builtins*.a") if p.is_file()]
+
+    print(f"Found {len(ndk_builtins)} NDK builtins in search paths", file=sys.stderr, flush=True)
+
+    clang_lib_dirs = list(clang_dir.glob("lib/clang/*/lib"))
+    if not clang_lib_dirs:
+        clang_lib_dirs = [clang_dir / "lib/clang/23/lib"]
+
+    for clang_lib in clang_lib_dirs:
+        dest_linux = clang_lib / "linux"
+        dest_linux.mkdir(parents=True, exist_ok=True)
+        for b in ndk_builtins:
+            dest_file = dest_linux / b.name
+            shutil.copyfile(b, dest_file)
+            print(f"Copied {b.name} -> {dest_file}", file=sys.stderr, flush=True)
+
+
 def build(cache, config, ndk):
     probe = cache / "probe"
     (probe / "src").mkdir(parents=True, exist_ok=True)
@@ -569,6 +637,7 @@ def build(cache, config, ndk):
                                   "--format-version", "1"]))
     source = Path(next(p["manifest_path"] for p in metadata["packages"] if p["name"] == "v8")).parent
     patch_android_config(source)
+    patch_clang_update_script(source, ndk)
     stub_missing_pydeps(source)
     install_linux_sysroot(source)
     place_ndk(source, ndk)
@@ -577,6 +646,7 @@ def build(cache, config, ndk):
     clang = find_host_clang()
     libclang = find_libclang()
     lld = find_lld(clang)
+    ensure_clang_builtins(source, cache, config, ndk)
     try:
         run(["rustup", "target", "add", config["target"]], check=False)
     except OSError:
