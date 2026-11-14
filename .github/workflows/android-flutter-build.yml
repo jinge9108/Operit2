@@ -71,7 +71,7 @@ jobs:
   build-android:
     needs: build-android-runtime
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       RUSTFLAGS: -Awarnings
       RUST_TOOLCHAIN_VERSION: 1.95.0
@@ -235,11 +235,14 @@ jobs:
           RELEASE_KEY_PASSWORD=$env:ANDROID_RELEASE_KEY_PASSWORD
           "@ | Set-Content -Path (Join-Path $secretsDir "android-signing.properties") -Encoding utf8
 
-      - name: Cache source-built Android V8
-        uses: actions/cache@v4
+      - name: Restore source-built Android V8
+        uses: actions/cache/restore@v4
+        id: cache-v8
         with:
           path: D:\b
-          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-152.2.0-v1
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-android-v8-
 
       - name: Check build environment
         shell: pwsh
@@ -248,11 +251,19 @@ jobs:
       - name: Build and package Android app
         shell: pwsh
         run: |
+          cargo update -p memchr -p bitflags --manifest-path apps/flutter/native/operit-flutter-bridge/Cargo.toml
           $version = (Select-String -Path apps/flutter/app/pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$').Matches
           if ($version.Count -ne 1) {
             throw "apps/flutter/app/pubspec.yaml must contain exactly one release version line"
           }
           python tools/build_scripts/build_flutter_android.py --build-name $version[0].Groups[1].Value --build-number $version[0].Groups[2].Value --enforce-lockfile
+
+      - name: Save source-built Android V8 cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: D:\b
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-152.2.0-v1
 
       - name: Build and package Android module
         shell: pwsh
