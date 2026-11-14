@@ -320,6 +320,34 @@ def patch_android_config(source):
                 )
                 modified = True
 
+            # Ensure Clang toolchain binaries append .exe when host_os == "win"
+            if 'cc = "${toolprefix}clang"' in content and '_tool_ext' not in content:
+                content = content.replace(
+                    'cc = "${toolprefix}clang"',
+                    '_tool_ext = ""\n    if (host_os == "win") {\n      _tool_ext = ".exe"\n    }\n    cc = "${toolprefix}clang${_tool_ext}"'
+                )
+                content = content.replace('cxx = "${toolprefix}clang++"', 'cxx = "${toolprefix}clang++${_tool_ext}"')
+                content = content.replace('ar = "${toolprefix}llvm-ar"', 'ar = "${toolprefix}llvm-ar${_tool_ext}"')
+                content = content.replace('readelf = "${toolprefix}llvm-readelf"', 'readelf = "${toolprefix}llvm-readelf${_tool_ext}"')
+                content = content.replace('nm = "${toolprefix}llvm-nm"', 'nm = "${toolprefix}llvm-nm${_tool_ext}"')
+                modified = True
+
+            if 'cc = "$_prefix/clang"' in content and '_prefix_ext' not in content:
+                content = content.replace(
+                    'cc = "$_prefix/clang"',
+                    '_prefix_ext = ""\n    if (host_os == "win") {\n      _prefix_ext = ".exe"\n    }\n    cc = "$_prefix/clang${_prefix_ext}"'
+                )
+                content = content.replace('cxx = "$_prefix/clang++"', 'cxx = "$_prefix/clang++${_prefix_ext}"')
+                content = content.replace('ar = "$_prefix/llvm-ar"', 'ar = "$_prefix/llvm-ar${_prefix_ext}"')
+                modified = True
+
+            if 'strip = rebase_path("$clang_base_path/bin/llvm-strip"' in content and '_strip_ext' not in content:
+                content = content.replace(
+                    'strip = rebase_path("$clang_base_path/bin/llvm-strip"',
+                    '_strip_ext = ""\n    if (host_os == "win") {\n      _strip_ext = ".exe"\n    }\n    strip = rebase_path("$clang_base_path/bin/llvm-strip${_strip_ext}"'
+                )
+                modified = True
+
             if modified:
                 print(f"Patched GN config: {gnf.relative_to(source)}", file=sys.stderr, flush=True)
                 gnf.write_text(content)
@@ -640,6 +668,15 @@ def ensure_clang_builtins(source, cache, config, ndk):
     if update_script.is_file():
         print(f"Ensuring Chromium clang is downloaded to {clang_dir}", file=sys.stderr, flush=True)
         run([sys.executable, str(update_script), "--output-dir", str(clang_dir)])
+
+    if IS_WINDOWS and (clang_dir / "bin").is_dir():
+        for exe in (clang_dir / "bin").glob("*.exe"):
+            alias = exe.with_suffix("")
+            if not alias.exists():
+                try:
+                    shutil.copyfile(exe, alias)
+                except Exception as e:
+                    print(f"Warning: could not copy {exe} to {alias}: {e}", file=sys.stderr, flush=True)
 
     ndk_search_paths = [ndk, source / "third_party/android_ndk", source / "third_party/android_toolchain/ndk"]
     sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
