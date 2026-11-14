@@ -312,6 +312,14 @@ def patch_android_config(source):
                 )
                 modified = True
 
+            # Allow Windows host cross-compilation in snapshot_toolchain.gni
+            if 'is_win && v8_current_cpu == "arm64"' in content:
+                content = content.replace(
+                    'is_win && v8_current_cpu == "arm64"',
+                    '(is_win || host_os == "win") && v8_current_cpu == "arm64"'
+                )
+                modified = True
+
             if modified:
                 print(f"Patched GN config: {gnf.relative_to(source)}", file=sys.stderr, flush=True)
                 gnf.write_text(content)
@@ -336,6 +344,21 @@ def patch_android_config(source):
                 "}\n"
             )
         config.write_text(cfg_content)
+
+    # 3. Define clang_x64_v8_arm64 in build/toolchain/win/BUILD.gn if missing
+    win_build_gn = source / "build/toolchain/win/BUILD.gn"
+    if win_build_gn.is_file():
+        wbg_content = win_build_gn.read_text()
+        if "x64_v8_arm64" not in wbg_content:
+            wbg_content += (
+                "\n# Added by Operit2 for Android ARM64 cross-compile on Windows host\n"
+                "win_toolchains(\"x64_v8_arm64\") {\n"
+                "  toolchain_arch = \"x64\"\n"
+                "  clang_toolchain_prefix = \"clang_\"\n"
+                "}\n"
+            )
+            print("Added clang_x64_v8_arm64 toolchain to build/toolchain/win/BUILD.gn", file=sys.stderr, flush=True)
+            win_build_gn.write_text(wbg_content)
 
 
 def stub_missing_pydeps(source):
