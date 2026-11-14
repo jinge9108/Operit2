@@ -124,6 +124,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Cache Gradle wrapper and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper/
+            ~/.gradle/caches/
+          key: ${{ runner.os }}-gradle-${{ hashFiles('apps/flutter/app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Pre-download Gradle wrapper
+        shell: pwsh
+        working-directory: apps/flutter/app/android
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            Write-Host "Pre-warming Gradle wrapper (attempt $i)..."
+            $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c gradlew.bat --version" -NoNewWindow -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+              Write-Host "Gradle wrapper is ready."
+              break
+            }
+            if ($i -eq 5) {
+              throw "Failed to download Gradle wrapper after 5 attempts."
+            }
+            Start-Sleep -Seconds 5
+          }
+
       - name: Install FVM
         shell: pwsh
         run: |
