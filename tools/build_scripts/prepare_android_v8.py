@@ -285,22 +285,37 @@ def place_ndk(source, ndk):
 
 
 def patch_android_config(source):
-    """Declare android_ndk_version in the vendored Chromium build config.
+    """Declare android_ndk_version and support Windows hosts in the vendored Chromium build config."""
+    # 1. Allow Windows host in BUILDCONFIG.gn
+    buildconfig = source / "build/config/BUILDCONFIG.gn"
+    if buildconfig.is_file():
+        bc_content = buildconfig.read_text()
+        bc_patched = re.sub(
+            r'assert\(host_os == "linux",\s*"Android builds are only supported on Linux\."\)',
+            '# assert(host_os == "linux", "Android builds are only supported on Linux.")',
+            bc_content
+        )
+        if bc_patched != bc_content:
+            buildconfig.write_text(bc_patched)
 
-    Chromium's build/config/android/BUILD.gn reads android_ndk_version, but the
-    copy vendored into the published crate lacks the upstream declare_args
-    block, so GN fails with "Undefined identifier" no matter what args.gn sets.
-    """
+    # 2. Allow Windows host in build/config/android/config.gni
     config = source / "build/config/android/config.gni"
-    if "android_ndk_version" in config.read_text():
-        return
-    with config.open("a") as file:
-        file.write(
-            "\n# Added by Operit2's prepare_android_v8.py: the vendored config\n"
-            "# references android_ndk_version without declaring it upstream.\n"
-            "declare_args() {\n"
-            "  android_ndk_version = \"unknown\"\n"
-            "}\n")
+    if config.is_file():
+        cfg_content = config.read_text()
+        target_host_os = '  } else if (host_os == "mac") {\n    android_host_os = "darwin"'
+        repl_host_os = '  } else if (host_os == "mac") {\n    android_host_os = "darwin"\n  } else if (host_os == "win") {\n    android_host_os = "windows"'
+        if target_host_os in cfg_content and 'android_host_os = "windows"' not in cfg_content:
+            cfg_content = cfg_content.replace(target_host_os, repl_host_os)
+
+        if "android_ndk_version" not in cfg_content:
+            cfg_content += (
+                "\n# Added by Operit2\'s prepare_android_v8.py: the vendored config\n"
+                "# references android_ndk_version without declaring it upstream.\n"
+                "declare_args() {\n"
+                "  android_ndk_version = \"unknown\"\n"
+                "}\n"
+            )
+        config.write_text(cfg_content)
 
 
 def stub_missing_pydeps(source):
@@ -530,7 +545,7 @@ def build(cache, config, ndk):
         env.pop(name, None)
     # GN_ARGS carries only what rusty_v8's build script does not set itself.
     args = {**GN_OPTIONS, "android_ndk_api_level": api_level(),
-            "android_ndk_version": ndk_version(ndk), "android_ndk_root": str(ndk)}
+            "android_ndk_version": ndk_version(ndk), "android_ndk_root": str(ndk).replace("\\", "/")}
     if lld:
         args["lld_path"] = str(lld)
     env.update(V8_FROM_SOURCE="1", PYTHON=sys.executable,
