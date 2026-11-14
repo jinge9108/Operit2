@@ -321,7 +321,18 @@ def patch_android_config(source):
                 modified = True
 
             # Ensure Clang toolchain binaries append .exe when host_os == "win"
-            if 'cc = "${toolprefix}clang"' in content and '_tool_ext' not in content:
+            if 'cxx = "${prefix}/clang++"' in content and '_tool_ext' not in content:
+                content = content.replace(
+                    'cc = "${prefix}/clang"',
+                    '_tool_ext = ""\n    if (host_os == "win") {\n      _tool_ext = ".exe"\n    }\n    cc = "${prefix}/clang${_tool_ext}"'
+                )
+                content = content.replace('cxx = "${prefix}/clang++"', 'cxx = "${prefix}/clang++${_tool_ext}"')
+                content = content.replace('ar = "${prefix}/llvm-ar"', 'ar = "${prefix}/llvm-ar${_tool_ext}"')
+                content = content.replace('readelf = "${prefix}/llvm-readelf"', 'readelf = "${prefix}/llvm-readelf${_tool_ext}"')
+                content = content.replace('nm = "${prefix}/llvm-nm"', 'nm = "${prefix}/llvm-nm${_tool_ext}"')
+                modified = True
+
+            if 'cxx = "${toolprefix}clang++"' in content and '_tool_ext' not in content:
                 content = content.replace(
                     'cc = "${toolprefix}clang"',
                     '_tool_ext = ""\n    if (host_os == "win") {\n      _tool_ext = ".exe"\n    }\n    cc = "${toolprefix}clang${_tool_ext}"'
