@@ -49,11 +49,9 @@ foreach ($item in $items) {
     foreach ($url in $urls) {
         Write-Host "Trying $url..."
         try {
-            if (Get-Command curl -ErrorAction SilentlyContinue) {
-                curl.exe -L --retry 3 --retry-delay 2 --retry-all-errors -o $archivePath $url
-                if (-not (Test-Path $archivePath)) {
-                    curl -L --retry 3 --retry-delay 2 --retry-all-errors -o $archivePath $url
-                }
+            $curl = Get-Command curl -ErrorAction SilentlyContinue
+            if ($curl) {
+                & $curl.Source -L --retry 3 --retry-delay 2 --retry-all-errors -o $archivePath $url
             } else {
                 Invoke-WebRequest -Uri $url -OutFile $archivePath
             }
