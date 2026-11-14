@@ -81,6 +81,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Configure Git mirror for OpenHarmony packages
+        shell: pwsh
+        run: |
+          git config --global url."https://github.com/xuanxuan123xuan/flutter_packages".insteadOf "https://gitee.com/openharmony-sig/flutter_packages"
+          git config --system url."https://github.com/xuanxuan123xuan/flutter_packages".insteadOf "https://gitee.com/openharmony-sig/flutter_packages"
+
       - name: Download Android terminal runtime
         uses: actions/download-artifact@v4
         with:
