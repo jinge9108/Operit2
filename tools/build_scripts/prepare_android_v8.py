@@ -286,17 +286,37 @@ def place_ndk(source, ndk):
 
 def patch_android_config(source):
     """Declare android_ndk_version and support Windows hosts in the vendored Chromium build config."""
-    # 1. Allow Windows host in BUILDCONFIG.gn
-    buildconfig = source / "build/config/BUILDCONFIG.gn"
-    if buildconfig.is_file():
-        bc_content = buildconfig.read_text()
-        bc_patched = re.sub(
-            r'assert\(host_os == "linux",\s*"Android builds are only supported on Linux\."\)',
-            '# assert(host_os == "linux", "Android builds are only supported on Linux.")',
-            bc_content
-        )
-        if bc_patched != bc_content:
-            buildconfig.write_text(bc_patched)
+    # 1. Allow Windows host in all GN build configs (e.g., BUILDCONFIG.gn, toolchain.gni, etc.)
+    for gnf in source.rglob("*.gn*"):
+        if not gnf.is_file():
+            continue
+        try:
+            content = gnf.read_text()
+            modified = False
+
+            # Allow Windows host in BUILDCONFIG.gn
+            if 'assert(host_os == "linux"' in content:
+                content = re.sub(
+                    r'assert\(host_os == "linux",\s*"Android builds are only supported on Linux\."\)',
+                    '# assert(host_os == "linux", "Android builds are only supported on Linux.")',
+                    content
+                )
+                modified = True
+
+            # Allow Windows host in assertions checking is_win (such as in build/toolchain/win)
+            if 'assert(is_win' in content:
+                content = re.sub(
+                    r'assert\(\s*is_win\b([^\)]*)\)',
+                    r'assert((is_win || host_os == "win")\1)',
+                    content
+                )
+                modified = True
+
+            if modified:
+                print(f"Patched GN config: {gnf.relative_to(source)}", file=sys.stderr, flush=True)
+                gnf.write_text(content)
+        except Exception as e:
+            print(f"Warning: could not patch {gnf}: {e}", file=sys.stderr, flush=True)
 
     # 2. Allow Windows host in build/config/android/config.gni
     config = source / "build/config/android/config.gni"
@@ -557,9 +577,10 @@ def build(cache, config, ndk):
     # uintptr_t 32-bit and breaks the V8 headers. Point it at the NDK sysroot
     # via the lowercase spelling bindgen 0.72 reads (uppercase is ignored).
     sysroot = ndk_prebuilt(ndk) / "sysroot"
+    sysroot_arg = str(sysroot).replace("\\", "/")
     for android_target in TARGETS:
         env[f"BINDGEN_EXTRA_CLANG_ARGS_{android_target.replace('-', '_')}"] = (
-            f"--target={android_target}{api_level()} --sysroot={sysroot}")
+            f"--target={android_target}{api_level()} --sysroot={sysroot_arg}")
     if clang:
         env["CLANG_BASE_PATH"] = str(clang)
     env["LIBCLANG_PATH"] = str(libclang)

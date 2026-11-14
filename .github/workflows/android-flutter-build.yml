@@ -78,6 +78,7 @@ jobs:
       FVM_VERSION: 4.3.0
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      CARGO_HOME: "D:\\a\\cargo_home"
 
     steps:
       - name: Checkout
