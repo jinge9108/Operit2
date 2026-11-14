@@ -32,6 +32,23 @@ try:
 except ImportError:  # Windows: Gradle serializes task execution instead.
     fcntl = None
 
+# Ensure all file reads/writes and subprocess streams on Windows use UTF-8
+_orig_read_text = Path.read_text
+_orig_write_text = Path.write_text
+
+def _safe_read_text(self, *args, **kwargs):
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
+    return _orig_read_text(self, *args, **kwargs)
+
+def _safe_write_text(self, *args, **kwargs):
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
+    return _orig_write_text(self, *args, **kwargs)
+
+Path.read_text = _safe_read_text
+Path.write_text = _safe_write_text
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_LOCK = REPO_ROOT / "apps/flutter/native/operit-flutter-bridge/Cargo.lock"
 CACHE_ROOT = REPO_ROOT / "tools/release/work/android-v8"
@@ -81,11 +98,14 @@ ARTIFACTS = ("librusty_v8.a", "src_binding.rs", "args.gn")
 def run(command, **kwargs):
     print("+ " + shlex.join(map(str, command)), file=sys.stderr, flush=True)
     kwargs.setdefault("check", True)
+    if kwargs.get("text"):
+        kwargs.setdefault("encoding", "utf-8")
+        kwargs.setdefault("errors", "replace")
     return subprocess.run(list(map(str, command)), **kwargs)
 
 
 def output(command):
-    return run(command, capture_output=True, text=True).stdout.strip()
+    return run(command, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
 
 
 def api_level():

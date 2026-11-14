@@ -335,11 +335,15 @@ val prepareOperitAndroidV8Tasks = selectedOperitRustTargets.associateWith { targ
         environment("OPERIT_ANDROID_V8_NDK", android.ndkDirectory.absolutePath)
         // Windows source builds locate libclang for the bindings generation.
         environment("OPERIT_LIBCLANG_DIR", operitLibclangDir.absolutePath)
+        environment("PYTHONUTF8", "1")
+        environment("PYTHONIOENCODING", "utf-8")
     }
 }
 
 val syncOperitPlugins = tasks.register<Exec>("syncOperitPlugins") {
     workingDir = operitRepoRoot
+    environment("PYTHONUTF8", "1")
+    environment("PYTHONIOENCODING", "utf-8")
     commandLine(
         operitPluginSyncPython.absolutePath,
         operitPluginSyncScript.absolutePath,
@@ -409,6 +413,8 @@ androidComponents {
                 environment("LIBCLANG_PATH", operitLibclangDir.absolutePath)
                 environment("BINDGEN_EXTRA_CLANG_ARGS_$ccEnvTarget", bindgenClangArgs)
                 environment("RUSTFLAGS", "-Awarnings")
+                environment("PYTHONUTF8", "1")
+                environment("PYTHONIOENCODING", "utf-8")
                 // Applies the source-built V8 library and bindings prepared by
                 // prepareOperitAndroidV8; upstream publishes no Android artifacts.
                 doFirst {
