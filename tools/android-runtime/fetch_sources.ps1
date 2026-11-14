@@ -24,7 +24,10 @@ $items = @(
     },
     @{
         Name = "talloc-2.4.3"
-        Url = "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz"
+        Urls = @(
+            "https://distfiles.gentoo.org/distfiles/f9/talloc-2.4.3.tar.gz",
+            "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz"
+        )
         Archive = "talloc-2.4.3.tar.gz"
         Sha256 = "DC46C40B9F46BB34DD97FE41F548B0E8B247B77A918576733C528E83ABD854DD"
         Extracted = "talloc-2.4.3"
@@ -41,11 +44,34 @@ $items = @(
 foreach ($item in $items) {
     $archivePath = Join-Path $downloadsDir $item.Archive
     Write-Host "Downloading $($item.Name)"
-    Invoke-WebRequest -Uri $item.Url -OutFile $archivePath
-
-    $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToUpperInvariant()
-    if ($actualSha256 -ne $item.Sha256) {
-        throw "$($item.Archive) SHA256 mismatch: $actualSha256"
+    $urls = if ($item.Urls) { $item.Urls } else { @($item.Url) }
+    $success = $false
+    foreach ($url in $urls) {
+        Write-Host "Trying $url..."
+        try {
+            if (Get-Command curl -ErrorAction SilentlyContinue) {
+                curl.exe -L --retry 3 --retry-delay 2 --retry-all-errors -o $archivePath $url
+                if (-not (Test-Path $archivePath)) {
+                    curl -L --retry 3 --retry-delay 2 --retry-all-errors -o $archivePath $url
+                }
+            } else {
+                Invoke-WebRequest -Uri $url -OutFile $archivePath
+            }
+            if ((Test-Path $archivePath) -and (Get-Item $archivePath).Length -gt 1000) {
+                $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToUpperInvariant()
+                if ($actualSha256 -eq $item.Sha256) {
+                    $success = $true
+                    break
+                } else {
+                    Write-Host "SHA256 mismatch for $url: expected $($item.Sha256), got $actualSha256"
+                }
+            }
+        } catch {
+            Write-Host "Download from $url failed: $_"
+        }
+    }
+    if (-not $success) {
+        throw "$($item.Name) download failed or SHA256 mismatch after all mirror attempts."
     }
 
     $extractPath = Join-Path $sourcesDir $item.Extracted
