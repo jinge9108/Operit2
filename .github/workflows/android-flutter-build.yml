@@ -134,21 +134,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Pre-download Gradle wrapper
+      - name: Pre-provision Gradle 8.14 distribution
         shell: pwsh
-        working-directory: apps/flutter/app/android
         run: |
-          for ($i = 1; $i -le 5; $i++) {
-            Write-Host "Pre-warming Gradle wrapper (attempt $i)..."
-            $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c gradlew.bat --version" -NoNewWindow -Wait -PassThru
-            if ($p.ExitCode -eq 0) {
-              Write-Host "Gradle wrapper is ready."
-              break
+          $distDir = Join-Path $env:USERPROFILE ".gradle/wrapper/dists/gradle-8.14-bin/38aieal9i53h9rfe7vjup95b9"
+          $okFile = Join-Path $distDir "gradle-8.14-bin.zip.ok"
+          if (Test-Path $okFile) {
+            Write-Host "Gradle 8.14 is already provisioned in cache."
+          } else {
+            Write-Host "Provisioning Gradle 8.14 distribution..."
+            New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+            $zipPath = Join-Path $distDir "gradle-8.14-bin.zip"
+            curl.exe -L --retry 5 --retry-delay 3 --retry-all-errors -o $zipPath "https://services.gradle.org/distributions/gradle-8.14-bin.zip"
+            if (-not (Test-Path $zipPath) -or (Get-Item $zipPath).Length -lt 100000000) {
+              throw "Downloaded Gradle zip is missing or too small."
             }
-            if ($i -eq 5) {
-              throw "Failed to download Gradle wrapper after 5 attempts."
-            }
-            Start-Sleep -Seconds 5
+            Write-Host "Extracting Gradle 8.14..."
+            Expand-Archive -Path $zipPath -DestinationPath $distDir -Force
+            New-Item $okFile -ItemType File -Force | Out-Null
+            Write-Host "Gradle 8.14 provisioned successfully!"
           }
 
       - name: Install FVM
