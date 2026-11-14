@@ -51,8 +51,8 @@ Path.write_text = _safe_write_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_LOCK = REPO_ROOT / "apps/flutter/native/operit-flutter-bridge/Cargo.lock"
-CACHE_ROOT = REPO_ROOT / "tools/release/work/android-v8"
 IS_WINDOWS = sys.platform.startswith("win")
+CACHE_ROOT = Path(os.environ["OPERIT_V8_CACHE_ROOT"]) if "OPERIT_V8_CACHE_ROOT" in os.environ else (Path("D:/b") if IS_WINDOWS else REPO_ROOT / "tools/release/work/android-v8")
 HOST_TAG = {"win32": "windows-x86_64", "darwin": "darwin-x86_64"}.get(sys.platform, "linux-x86_64")
 # rusty_v8's build script maps only the x86_64 and aarch64 android targets to
 # GN cpus; armv7 would end up as "unknown".
@@ -206,7 +206,7 @@ def link_directory(link, target):
     """Create a symlink, or a directory junction on Windows (no privileges needed)."""
     link.parent.mkdir(parents=True, exist_ok=True)
     if IS_WINDOWS:
-        run(["cmd", "/c", "mklink", "/J", link, target])
+        run(["cmd", "/c", "mklink", "/J", str(link).replace("/", "\\"), str(target).replace("/", "\\")])
     else:
         link.symlink_to(target, target_is_directory=True)
 
@@ -677,6 +677,23 @@ def build(cache, config, ndk):
     metadata = json.loads(output(["cargo", "metadata", "--manifest-path", probe / "Cargo.toml",
                                   "--format-version", "1"]))
     source = Path(next(p["manifest_path"] for p in metadata["packages"] if p["name"] == "v8")).parent
+    if IS_WINDOWS:
+        short_source = Path("D:/s")
+        if short_source.exists() or short_source.is_symlink():
+            try:
+                os.rmdir(short_source)
+            except OSError:
+                run(["cmd", "/c", "rmdir", str(short_source).replace("/", "\\")], check=False)
+        link_directory(short_source, source)
+        source = short_source
+        (probe / "Cargo.toml").write_text(
+            '[package]\nname="operit-android-v8-build"\nversion="0.0.0"\nedition="2021"\n'
+            '[lib]\ncrate-type=["staticlib"]\n[dependencies]\n'
+            'v8 = { path = "D:/s" }\n[workspace]\n')
+        cargo_lock = probe / "Cargo.lock"
+        if cargo_lock.is_file():
+            cargo_lock.unlink()
+
     patch_android_config(source)
     patch_v8_build_rs(source)
     patch_clang_update_script(source, ndk)
@@ -729,8 +746,11 @@ def build(cache, config, ndk):
     if clang:
         env["CLANG_BASE_PATH"] = str(clang)
     env["LIBCLANG_PATH"] = str(libclang)
-    run(["cargo", "build", "--locked", "--manifest-path", probe / "Cargo.toml", "--release",
-         "--target", config["target"], "--jobs", os.environ.get("OPERIT_ANDROID_V8_JOBS", "6")], env=env)
+    cargo_cmd = ["cargo", "build", "--manifest-path", str(probe / "Cargo.toml"), "--release",
+                 "--target", config["target"], "--jobs", os.environ.get("OPERIT_ANDROID_V8_JOBS", "6")]
+    if not IS_WINDOWS:
+        cargo_cmd.insert(2, "--locked")
+    run(cargo_cmd, env=env)
     return (cache / "build").resolve() / config["target"] / "release/gn_out"
 
 

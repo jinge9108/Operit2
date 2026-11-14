@@ -78,7 +78,7 @@ jobs:
       FVM_VERSION: 4.3.0
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      CARGO_HOME: "${{ github.workspace }}\\.cargo_home"
+      CARGO_HOME: "D:\\c"
 
     steps:
       - name: Disable Strawberry Perl and enable Windows Long Paths
@@ -90,6 +90,8 @@ jobs:
             Write-Host "Removing Strawberry Perl to prevent 32-bit compiler/ccache collisions..."
             Remove-Item -Recurse -Force "C:\Strawberry" -ErrorAction SilentlyContinue
           }
+          New-Item -ItemType Directory -Force -Path "D:\b" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\c" | Out-Null
           $paths = ($env:PATH -split ';') | Where-Object { $_ -and ($_ -notlike '*Strawberry*') }
           $cleanPath = $paths -join ';'
           [Environment]::SetEnvironmentVariable("PATH", $cleanPath, "Machine")
@@ -236,7 +238,7 @@ jobs:
       - name: Cache source-built Android V8
         uses: actions/cache@v4
         with:
-          path: tools/release/work/android-v8
+          path: D:\b
           key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
 
       - name: Check build environment
