@@ -439,9 +439,30 @@ def patch_v8_build_rs(source):
             content = content.replace(old, new)
             modified = True
 
+    # 3. Use prebuilt src_binding.rs in build_binding() to avoid libclang failure on Windows host
+    build_binding_needle = "fn build_binding() {"
+    build_binding_hook = """fn build_binding() {
+  let out_path = build_dir().join("gn_out").join("src_binding.rs");
+  for cand in [
+    get_dirs().root.join("gen/src_binding_release_aarch64-unknown-linux-gnu.rs"),
+    get_dirs().root.join("gen/src_binding_release_aarch64-linux-android.rs"),
+  ] {
+    if cand.is_file() {
+      if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+      }
+      std::fs::copy(&cand, &out_path).expect("Could not copy prebuilt src_binding.rs");
+      println!("cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH={}", out_path.display());
+      return;
+    }
+  }"""
+    if build_binding_needle in content and "src_binding_release_aarch64-unknown-linux-gnu.rs" not in content:
+        content = content.replace(build_binding_needle, build_binding_hook)
+        modified = True
+
     if modified:
         build_rs.write_text(content)
-        print("Patched rusty_v8 build.rs to disable ccache/sccache compiler wrappers",
+        print("Patched rusty_v8 build.rs to disable ccache/sccache and use prebuilt bindings",
               file=sys.stderr, flush=True)
 
 
@@ -920,6 +941,23 @@ def build(cache, config, ndk):
                CARGO_TARGET_DIR=str((cache / "build").resolve()),
                GN=str(gn_ninja["gn"]), NINJA=str(gn_ninja["ninja"]),
                GN_ARGS=" ".join(f"{name}={json.dumps(value)}" for name, value in args.items()))
+    # Pre-populate prebuilt src_binding.rs for Android ARM64
+    gnu_binding = source / "gen/src_binding_release_aarch64-unknown-linux-gnu.rs"
+    android_binding = source / "gen/src_binding_release_aarch64-linux-android.rs"
+    if gnu_binding.is_file():
+        if not android_binding.is_file():
+            try:
+                shutil.copyfile(gnu_binding, android_binding)
+            except Exception:
+                pass
+        target_gn_out = (cache / "build").resolve() / config["target"] / "release/gn_out"
+        target_gn_out.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(gnu_binding, target_gn_out / "src_binding.rs")
+        except Exception:
+            pass
+        env["RUSTY_V8_SRC_BINDING_PATH"] = str(target_gn_out / "src_binding.rs")
+
     # Bindgen derives the triple from Cargo's TARGET but gets no sysroot, so it
     # falls back to the host's glibc headers, whose default wordsize makes
     # uintptr_t 32-bit and breaks the V8 headers. Point it at the NDK sysroot
